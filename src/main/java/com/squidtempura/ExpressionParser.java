@@ -14,8 +14,24 @@ public class ExpressionParser {
         return parseBaseExpression(expression, null);
     }
 
+    public FunctionDefinition parseFunctionDefinition(String expression) {
+        String base = expression;
+        int start = expression.lastIndexOf('{');
+        int end = expression.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            base = expression.substring(0, start).trim();
+        }
+
+        FunctionDefinition def = tryParseDefinition(base);
+        return def;
+    }
+
     private ParsedExpression parseBaseExpression(String base, Constraint constraint) {
         String trimmed = base.trim();
+        FunctionDefinition def = tryParseDefinition(trimmed);
+        if (def != null) {
+            return new ParsedExpression(def.body, constraint, ExprType.FUNCTION, Double.NaN);
+        }
         int eq = trimmed.indexOf('=');
         if (eq >= 0) {
             String left = trimmed.substring(0, eq).trim();
@@ -32,6 +48,39 @@ public class ExpressionParser {
             }
         }
         return new ParsedExpression(trimmed, constraint, ExprType.FUNCTION, Double.NaN);
+    }
+
+    private FunctionDefinition tryParseDefinition(String trimmed) {
+        int eq = trimmed.indexOf('=');
+        if (eq < 0) return null;
+
+        String left = trimmed.substring(0, eq).trim();
+        String right = trimmed.substring(eq + 1).trim();
+
+        int lp = left.indexOf('(');
+        int rp = left.lastIndexOf(')');
+        if (lp < 0 || rp < lp) return null;
+
+        String name = left.substring(0, lp).trim();
+        String arg = left.substring(lp + 1, rp).trim();
+
+        if (name.isEmpty()) return null;
+        if (!isValidIdentifier(name)) return null;
+        if (!arg.equalsIgnoreCase("x")) return null;
+
+        if (right.isEmpty()) return null;
+        return new FunctionDefinition(name, right);
+    }
+
+    private boolean isValidIdentifier(String s) {
+        if (s.isEmpty()) return false;
+        char c0 = s.charAt(0);
+        if (!(Character.isLetter(c0) || c0 == '_')) return false;
+        for (int i = 1; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!(Character.isLetterOrDigit(c) || c == '_')) return false;
+        }
+        return true;
     }
 
     private Constraint parseConstraint(String constraintStr) {

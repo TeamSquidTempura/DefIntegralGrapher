@@ -409,6 +409,7 @@ public class GraphPanel extends JPanel {
     public void setExpression(List<String> exprs) {
         expressions = exprs;
         parsedCache.clear();
+        updateFunctionDefinitions();
         repaint();
     }
 
@@ -764,5 +765,16 @@ public class GraphPanel extends JPanel {
             parsedCache.put(expression, parsed);
         }
         return parsed;
+    }
+
+    private void updateFunctionDefinitions() {
+        Map<String, String> defs = new HashMap<>();
+        for (String expression : expressions) {
+            FunctionDefinition def = expressionParser.parseFunctionDefinition(expression);
+            if (def != null) {
+                defs.put(def.name, def.body);
+            }
+        }
+        evaluator.setFunctions(defs);
     }
 }
