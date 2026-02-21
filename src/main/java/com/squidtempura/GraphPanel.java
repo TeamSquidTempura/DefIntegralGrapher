@@ -27,6 +27,9 @@ public class GraphPanel extends JPanel {
     private List<Point2D> intersections = new ArrayList<>();
     private final Map<String, ParsedExpression> parsedCache = new HashMap<>();
     private final ExpressionParser expressionParser = new ExpressionParser();
+    private final IntegralParser integralParser = new IntegralParser();
+    private final List<IntegralRegion> integralRegions = new ArrayList<>();
+    private final Map<String, IntegralLabel> integralLabels = new HashMap<>();
 
     private FunctionEvaluator evaluator = new FunctionEvaluator();
     private List<String> expressions = new ArrayList<String>();
@@ -43,6 +46,10 @@ public class GraphPanel extends JPanel {
             public void mouseClicked(MouseEvent e) {
                 Point p = e.getPoint();
                 if (handleIntersectionClick(p)) {
+                    repaint();
+                    return;
+                }
+                if (handleIntegralAreaClick(p)) {
                     repaint();
                     return;
                 }
@@ -121,6 +128,7 @@ public class GraphPanel extends JPanel {
                 clickedY = Double.NaN;
                 labelVisible = false;
                 selectedIntersections.clear();
+                integralLabels.clear();
                 repaint();
             }
         });
@@ -153,6 +161,7 @@ public class GraphPanel extends JPanel {
 
         drawGrid(g2);
         drawAxes(g2, baseTransform);
+        drawIntegralAreas(g2, at);
         drawFunctions(g2);
         drawIntersections(g2);
         drawClickedPoint(g2, baseTransform);
@@ -160,6 +169,7 @@ public class GraphPanel extends JPanel {
         g2.setTransform(baseTransform);
         drawMouseCoordinates(g2);
         drawIntersectionLabels(g2, baseTransform);
+        drawIntegralLabels(g2, baseTransform);
     }
 
     private void drawGrid(Graphics2D g2) {
@@ -353,6 +363,43 @@ public class GraphPanel extends JPanel {
         }
     }
 
+    private void drawIntegralAreas(Graphics2D g2, AffineTransform worldToScreen) {
+        integralRegions.clear();
+        if (expressions.isEmpty()) return;
+
+        double left = (-getWidth() / 2.0) / scale - offsetX;
+        double right = (getWidth() / 2.0) / scale - offsetX;
+
+        Composite savedComposite = g2.getComposite();
+        g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.12f));
+
+        Color[] fills = {
+                new Color(80, 120, 220),
+                new Color(220, 120, 80),
+                new Color(80, 180, 120),
+                new Color(200, 120, 200)
+        };
+        int colorIdx = 0;
+
+        for (String expression : expressions) {
+            ParsedExpression parsed = getParsed(expression);
+            String base = parsed.baseExpression;
+            List<IntegralSpec> specs = integralParser.extractIntegrals(base);
+            for (IntegralSpec spec : specs) {
+                Path2D area = buildIntegralArea(spec, left, right);
+                if (area == null) continue;
+
+                g2.setColor(fills[colorIdx % fills.length]);
+                g2.fill(area);
+                Shape screenShape = worldToScreen.createTransformedShape(area);
+                integralRegions.add(new IntegralRegion(spec, screenShape));
+                colorIdx++;
+            }
+        }
+
+        g2.setComposite(savedComposite);
+    }
+
     private void drawIntersections(Graphics2D g2) {
         intersections = computeIntersections();
         if (intersections.isEmpty()) return;
@@ -387,6 +434,24 @@ public class GraphPanel extends JPanel {
         g2.setTransform(saved);
     }
 
+    private void drawIntegralLabels(Graphics2D g2, AffineTransform baseTransform) {
+        if (integralLabels.isEmpty()) return;
+
+        AffineTransform saved = g2.getTransform();
+        g2.setTransform(baseTransform);
+        g2.setColor(Color.BLACK);
+        g2.setFont(new Font("Consolas", Font.PLAIN, 12));
+
+        for (IntegralLabel label : integralLabels.values()) {
+            int sx = (int) ((label.worldX + offsetX) * scale + getWidth() / 2f);
+            int sy = (int) ((-label.worldY - offsetY) * scale + getHeight() / 2f);
+            String text = String.format("Area ≈ %.6f", label.area);
+            g2.drawString(text, sx + 10, sy - 10);
+        }
+
+        g2.setTransform(saved);
+    }
+
     private void drawClickedPoint(Graphics2D g2, AffineTransform baseTransform) {
         if (Double.isNaN(clickedX)) return;
 
@@ -410,6 +475,7 @@ public class GraphPanel extends JPanel {
         expressions = exprs;
         parsedCache.clear();
         updateFunctionDefinitions();
+        integralLabels.clear();
         repaint();
     }
 
@@ -491,6 +557,27 @@ public class GraphPanel extends JPanel {
             selectedIntersections.add(nearest);
         }
         return true;
+    }
+
+    private boolean handleIntegralAreaClick(Point p) {
+        if (integralRegions.isEmpty()) return false;
+
+        for (IntegralRegion region : integralRegions) {
+            if (!region.screenShape.contains(p)) continue;
+
+            String key = region.spec.key();
+            if (integralLabels.containsKey(key)) {
+                integralLabels.remove(key);
+            } else {
+                double wx = (p.x - getWidth() / 2.0) / scale - offsetX;
+                double wy = -(p.y - getHeight() / 2.0) / scale - offsetY;
+                double area = evaluator.evaluate(region.spec.toExpression(), 0.0);
+                integralLabels.put(key, new IntegralLabel(key, wx, wy, area));
+            }
+            return true;
+        }
+
+        return false;
     }
 
     private int indexOfSelectedIntersection(Point2D p) {
@@ -692,6 +779,57 @@ public class GraphPanel extends JPanel {
         return false;
     }
 
+    private Path2D buildIntegralArea(IntegralSpec spec, double left, double right) {
+        double a = evaluator.evaluate(spec.aExpr, 0.0);
+        double b = evaluator.evaluate(spec.bExpr, 0.0);
+        if (Double.isNaN(a) || Double.isNaN(b)) return null;
+        if (a == b) return null;
+
+        double start = Math.min(a, b);
+        double end = Math.max(a, b);
+        if (end < left || start > right) return null;
+
+        start = Math.max(start, left);
+        end = Math.min(end, right);
+
+        int samples = Math.max(2, getWidth());
+        double step = (end - start) / samples;
+        if (step <= 0) return null;
+
+        Path2D area = new Path2D.Double();
+        boolean segment = false;
+        double lastX = start;
+
+        for (int i = 0; i <= samples; i++) {
+            double x = start + i * step;
+            double y = evaluator.evaluate(spec.integrandExpr, x);
+            if (Double.isNaN(y) || Double.isInfinite(y)) {
+                if (segment) {
+                    area.lineTo(lastX, 0);
+                    area.closePath();
+                    segment = false;
+                }
+                continue;
+            }
+
+            if (!segment) {
+                area.moveTo(x, 0);
+                area.lineTo(x, y);
+                segment = true;
+            } else {
+                area.lineTo(x, y);
+            }
+            lastX = x;
+        }
+
+        if (segment) {
+            area.lineTo(end, 0);
+            area.closePath();
+        }
+
+        return area;
+    }
+
     private void drawVerticalLine(Graphics2D g2, ParsedExpression parsed, double left, double right, double bottom, double top) {
         if (Double.isNaN(parsed.xConst)) return;
         if (parsed.constraint != null && !parsed.constraint.allowsX(parsed.xConst)) return;
@@ -756,6 +894,127 @@ public class GraphPanel extends JPanel {
         }
 
         return y;
+    }
+
+    private static class IntegralSpec {
+        final String integrandExpr;
+        final String aExpr;
+        final String bExpr;
+
+        IntegralSpec(String integrandExpr, String aExpr, String bExpr) {
+            this.integrandExpr = integrandExpr;
+            this.aExpr = aExpr;
+            this.bExpr = bExpr;
+        }
+
+        String key() {
+            return integrandExpr + "|" + aExpr + "|" + bExpr;
+        }
+
+        String toExpression() {
+            return "int(" + integrandExpr + "," + aExpr + "," + bExpr + ")";
+        }
+    }
+
+    private static class IntegralRegion {
+        final IntegralSpec spec;
+        final Shape screenShape;
+
+        IntegralRegion(IntegralSpec spec, Shape screenShape) {
+            this.spec = spec;
+            this.screenShape = screenShape;
+        }
+    }
+
+    private static class IntegralLabel {
+        final String key;
+        final double worldX;
+        final double worldY;
+        final double area;
+
+        IntegralLabel(String key, double worldX, double worldY, double area) {
+            this.key = key;
+            this.worldX = worldX;
+            this.worldY = worldY;
+            this.area = area;
+        }
+    }
+
+    private static class IntegralParser {
+        List<IntegralSpec> extractIntegrals(String expr) {
+            List<IntegralSpec> result = new ArrayList<>();
+            int idx = 0;
+            while (idx < expr.length()) {
+                int start = expr.indexOf("int(", idx);
+                if (start < 0) break;
+                ParsedIntegral p = parseAt(expr, start);
+                if (p != null) {
+                    result.add(new IntegralSpec(p.integrand, p.aExpr, p.bExpr));
+                    idx = p.endIndex + 1;
+                } else {
+                    idx = start + 4;
+                }
+            }
+            return result;
+        }
+
+        boolean isSingleIntegral(String expr) {
+            String trimmed = expr.trim();
+            if (!trimmed.startsWith("int(")) return false;
+            ParsedIntegral p = parseAt(trimmed, 0);
+            return p != null && p.endIndex == trimmed.length() - 1;
+        }
+
+        private ParsedIntegral parseAt(String expr, int intIndex) {
+            if (!expr.startsWith("int(", intIndex)) return null;
+            int start = intIndex + 4;
+            int depth = 1;
+            int i = start;
+            for (; i < expr.length(); i++) {
+                char c = expr.charAt(i);
+                if (c == '(') depth++;
+                else if (c == ')') {
+                    depth--;
+                    if (depth == 0) break;
+                }
+            }
+            if (depth != 0) return null;
+
+            String inside = expr.substring(start, i);
+            String[] parts = splitTopLevelCommas(inside);
+            if (parts.length != 3) return null;
+
+            ParsedIntegral p = new ParsedIntegral();
+            p.integrand = parts[0].trim();
+            p.aExpr = parts[1].trim();
+            p.bExpr = parts[2].trim();
+            p.endIndex = i;
+            return p;
+        }
+
+        private String[] splitTopLevelCommas(String s) {
+            List<String> parts = new ArrayList<>();
+            int depth = 0;
+            int last = 0;
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '(') depth++;
+                else if (c == ')') depth--;
+                else if (c == ',' && depth == 0) {
+                    parts.add(s.substring(last, i));
+                    last = i + 1;
+                }
+            }
+            parts.add(s.substring(last));
+            return parts.toArray(new String[0]);
+        }
+
+        private static class ParsedIntegral {
+            String integrand;
+            String aExpr;
+            String bExpr;
+            int endIndex;
+        }
     }
 
     private ParsedExpression getParsed(String expression) {

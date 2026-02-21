@@ -36,7 +36,7 @@ public class ExpressionParser {
         if (eq >= 0) {
             String left = trimmed.substring(0, eq).trim();
             String right = trimmed.substring(eq + 1).trim();
-            if (left.isEmpty() || left.equalsIgnoreCase("y")) {
+            if (left.equalsIgnoreCase("y")) {
                 return new ParsedExpression(right, constraint, ExprType.FUNCTION, Double.NaN);
             }
             if (left.equalsIgnoreCase("x")) {

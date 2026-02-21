@@ -180,9 +180,6 @@ public class FunctionEvaluator {
     }
 
     //Simpson's rule
-    /*
-    int ab f(x) dx = [(b-a)/6]{f(a)+4f([a+b]/2)+f(b)}
-     */
     private double integrateSimpson(String integrandExpr, double a, double b) {
         if (Double.isNaN(a) || Double.isNaN(b)) return Double.NaN;
         if (a == b) return 0.0;
@@ -196,7 +193,7 @@ public class FunctionEvaluator {
             sign = -1.0;
         }
 
-        int n = 200;
+        int n = 500;
         if (n % 2 == 1) n++;
         double h = (right - left) / n;
 
