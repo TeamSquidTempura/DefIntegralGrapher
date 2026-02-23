@@ -2,6 +2,13 @@ plugins {
     id("java")
 }
 
+tasks.jar {
+    manifest {
+        attributes["Main-Class"] = "com.squidtempura.Main"
+    }
+}
+
+
 group = "com.squidtempura"
 version = "1.0-SNAPSHOT"
 
