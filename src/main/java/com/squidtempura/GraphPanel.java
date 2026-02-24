@@ -11,6 +11,10 @@ import java.util.Map;
 
 public class GraphPanel extends JPanel {
 
+    private static final double MIN_SCALE = 0.2;
+    private static final double MAX_SCALE = 200000.0;
+    private static final double ZOOM_BASE = 1.08;
+
     private double scale = 50;
     private double offsetX = 0;
     private double offsetY = 0;
@@ -19,6 +23,8 @@ public class GraphPanel extends JPanel {
     private double mouseMathY = 0;
 
     private Point lastMouse;
+    private Point pressPoint;
+    private boolean dragging = false;
 
     private double clickedX = Double.NaN;
     private double clickedY = Double.NaN;
@@ -41,34 +47,18 @@ public class GraphPanel extends JPanel {
         addMouseListener(new MouseAdapter() {
             public void mousePressed(MouseEvent e) {
                 lastMouse = e.getPoint();
+                pressPoint = e.getPoint();
+                dragging = false;
             }
 
-            public void mouseClicked(MouseEvent e) {
+            public void mouseReleased(MouseEvent e) {
+                if (pressPoint == null) return;
                 Point p = e.getPoint();
-                if (handleIntersectionClick(p)) {
-                    repaint();
-                    return;
+                if (!dragging && pressPoint.distance(p) <= 10.0) {
+                    handlePointerTap(p);
                 }
-                if (handleIntegralAreaClick(p)) {
-                    repaint();
-                    return;
-                }
-                Point2D hit = findNearestCurvePoint(p);
-                if (hit != null) {
-                    if (isSamePoint(hit)) {
-                        labelVisible = !labelVisible;
-                    } else {
-                        clickedX = hit.getX();
-                        clickedY = hit.getY();
-                        labelVisible = true;
-                    }
-                } else {
-                    clickedX = Double.NaN;
-                    clickedY = Double.NaN;
-                    labelVisible = false;
-                }
-
-                repaint();
+                pressPoint = null;
+                dragging = false;
             }
         });
 
@@ -76,6 +66,14 @@ public class GraphPanel extends JPanel {
             public void mouseDragged(MouseEvent e) {
 
                 Point p = e.getPoint();
+                if (!dragging) {
+                    if (pressPoint != null && pressPoint.distance(p) <= 10.0) {
+                        return;
+                    }
+                    dragging = true;
+                    lastMouse = p;
+                    return;
+                }
 
                 double dx = (p.x - lastMouse.x) / scale;
                 double dy = (p.y - lastMouse.y) / scale;
@@ -94,15 +92,14 @@ public class GraphPanel extends JPanel {
         });
 
         addMouseWheelListener(e -> {
-
-            double zoomFactor = 1.1;
+            double precise = e.getPreciseWheelRotation();
+            if (precise == 0.0) return;
             double oldScale = scale;
+            double zoomFactor = Math.pow(ZOOM_BASE, -precise);
 
-            if (e.getWheelRotation() < 0) {
-                scale *= zoomFactor;
-            } else {
-                scale /= zoomFactor;
-            }
+            scale = clamp(scale * zoomFactor, MIN_SCALE, MAX_SCALE);
+            if (scale == oldScale) return;
+
             Point p = e.getPoint();
 
             double mx = (p.x - getWidth()/2.0) / oldScale - offsetX;
@@ -114,6 +111,32 @@ public class GraphPanel extends JPanel {
             repaint();
         });
 
+    }
+
+    private void handlePointerTap(Point p) {
+        if (handleIntersectionClick(p)) {
+            repaint();
+            return;
+        }
+        if (handleIntegralAreaClick(p)) {
+            repaint();
+            return;
+        }
+        Point2D hit = findNearestCurvePoint(p);
+        if (hit != null) {
+            if (isSamePoint(hit)) {
+                labelVisible = !labelVisible;
+            } else {
+                clickedX = hit.getX();
+                clickedY = hit.getY();
+                labelVisible = true;
+            }
+        } else {
+            clickedX = Double.NaN;
+            clickedY = Double.NaN;
+            labelVisible = false;
+        }
+        repaint();
     }
     
     private void setupKeyBindings() {
@@ -139,6 +162,10 @@ public class GraphPanel extends JPanel {
         mouseMathY = -(p.y - getHeight()/2.0) / scale - offsetY;
     }
 
+    private double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
@@ -156,12 +183,16 @@ public class GraphPanel extends JPanel {
         at.translate(getWidth() / 2.0, getHeight() / 2.0);
         at.scale(scale, -scale);
         at.translate(offsetX, offsetY);
+        AffineTransform worldToPanel = new AffineTransform();
+        worldToPanel.translate(getWidth() / 2.0, getHeight() / 2.0);
+        worldToPanel.scale(scale, -scale);
+        worldToPanel.translate(offsetX, offsetY);
 
         g2.setTransform(at);
 
         drawGrid(g2);
         drawAxes(g2, baseTransform);
-        drawIntegralAreas(g2, at);
+        drawIntegralAreas(g2, worldToPanel);
         drawFunctions(g2);
         drawIntersections(g2);
         drawClickedPoint(g2, baseTransform);
@@ -363,7 +394,7 @@ public class GraphPanel extends JPanel {
         }
     }
 
-    private void drawIntegralAreas(Graphics2D g2, AffineTransform worldToScreen) {
+    private void drawIntegralAreas(Graphics2D g2, AffineTransform worldToPanel) {
         integralRegions.clear();
         if (expressions.isEmpty()) return;
 
@@ -391,7 +422,7 @@ public class GraphPanel extends JPanel {
 
                 g2.setColor(fills[colorIdx % fills.length]);
                 g2.fill(area);
-                Shape screenShape = worldToScreen.createTransformedShape(area);
+                Shape screenShape = worldToPanel.createTransformedShape(area);
                 integralRegions.add(new IntegralRegion(spec, screenShape));
                 colorIdx++;
             }
